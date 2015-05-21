@@ -96,7 +96,8 @@ using ctemplate_htmlparser::HtmlParser;
   ((len) == sizeof("" literal "") - 1 && \
    memcmp(str, literal, sizeof("" literal "") - 1) == 0)
 
-TemplateModifier::~TemplateModifier() {}
+TemplateModifier::~TemplateModifier() {};
+TemplateHelper::~TemplateHelper() {};
 
 void NullModifier::Modify(const char* in, size_t inlen,
                           const PerExpandData*,
@@ -1015,6 +1016,14 @@ bool AddXssSafeModifier(const char* long_name,
                  const TemplateModifier* modifier) {
   return AddModifierCommon(long_name, modifier, true);
 }
+
+std::map<std::string, TemplateHelper*> helpers;
+
+bool addTemplateHelper(const char* long_name, TemplateHelper* modifier) {
+	helpers[long_name] = modifier;
+	return true;
+}
+
 
 // If candidate_match is a better match for modname/modval than bestmatch,
 // update bestmatch.  To be a better match, two conditions must be met:
