@@ -68,6 +68,7 @@ class @ac_windows_dllexport@ TemplateDictionaryInterface {
   friend class VariableTemplateNode;
   friend class SectionTemplateNode;
   friend class TemplateTemplateNode;
+  friend class HelperTemplateNode;  
   // This class reaches into our internals for testing.
   friend class TemplateDictionaryPeer;
   friend class TemplateDictionaryPeerIterator;
