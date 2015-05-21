@@ -691,6 +691,7 @@ enum TemplateTokenType { TOKENTYPE_UNUSED,        TOKENTYPE_TEXT,
                          TOKENTYPE_COMMENT,       TOKENTYPE_SET_DELIMITERS,
                          TOKENTYPE_PRAGMA,        TOKENTYPE_NULL,
                          TOKENTYPE_HIDDEN_DEFAULT_SECTION,
+                         TOKENTYPE_HELPER
                        };
 
 }  // unnamed namespace
@@ -933,6 +934,87 @@ class TemplateNode {
 //    that should be emitted verbatim.  The text points into
 //    template_text_.
 // ----------------------------------------------------------------------
+
+class HelperTemplateNode : public TemplateNode {
+ public:
+  explicit HelperTemplateNode(const TemplateToken& token)
+      : token_(token) {
+    VLOG(2) << "Constructing TextTemplateNode: "
+            << string(token_.text, token_.textlen) << endl;
+  }
+  virtual ~HelperTemplateNode() {
+    VLOG(2) << "Deleting TextTemplateNode: "
+            << string(token_.text, token_.textlen) << endl;
+  }
+
+  // Expands the text node by simply outputting the text string. This
+  // virtual method does not use TemplateDictionaryInterface or PerExpandData.
+  // Returns true iff all the template files load and parse correctly.
+  virtual bool Expand(ExpandEmitter *output_buffer,
+                      const TemplateDictionaryInterface *dictionary,
+                      PerExpandData *per_expand_data,
+                      const TemplateCache *) const {
+
+	    std::string text = token_.text;
+		text = text.substr(0,token_.textlen);
+		std::string name = text;
+		std::map<std::string, std::string> params;
+		if (int pos = text.find(" ",0)) {
+			name = text.substr(0,pos);
+			std::string pair,param,value;
+			pos = text.find(" ",pos);
+			while (pos != text.npos) {
+				value="";
+				param="";
+				int nextpos = text.find("=",pos+1);
+				if (nextpos == text.npos) break;
+				param = text.substr(pos+1, nextpos-pos-1);
+				pos = nextpos;
+				if (text.substr(pos+1,1)=="\"") {
+					//value
+					nextpos=text.find("\"",pos+2);
+					value = text.substr(pos+2, nextpos-pos-2);
+					nextpos=text.find(" ",nextpos);
+				} else {
+					//variable
+
+					nextpos=text.find(" ",pos+1);
+					value = text.substr(pos+1, nextpos-pos-1);
+					HashedTemplateString variable_(value.c_str(),value.length());
+					TemplateString val = dictionary->GetValue(variable_);
+					value = val.data();
+				}
+
+				if (param != "") {
+					params[param] = value;
+				}
+				pos = nextpos;
+			}
+
+		}
+	if (helpers[name]) {
+		std::string ret = helpers[name]->Modify(params);
+		output_buffer->Emit(ret.c_str(), ret.length());
+	}
+
+    return true;
+  }
+
+  // A noop for text nodes*-
+  virtual void WriteHeaderEntries(string *outstring,
+                                  const string& filename) const {
+    return;
+  }
+
+  // Appends a representation of the text node to a string.
+  virtual void DumpToString(int level, string *out) const {
+    assert(out);
+    AppendTokenWithIndent(level, out, "Text Node: -->|", token_, "|<--\n");
+  }
+
+ private:
+  TemplateToken token_;  // The text held by this node.
+};
 
 class TextTemplateNode : public TemplateNode {
  public:
@@ -1395,6 +1477,7 @@ class SectionTemplateNode : public TemplateNode {
   bool AddSectionNode(const TemplateToken* token, Template* my_template,
                       bool hidden_by_default);
   bool AddSectionNode(const TemplateToken* token, Template* my_template);
+  bool AddHelperNode(const TemplateToken* token, Template* my_template);
 };
 
 // --- constructor and destructor, Expand, Dump, and WriteHeaderEntries
@@ -1542,6 +1625,35 @@ bool SectionTemplateNode::AddTextNode(const TemplateToken* token,
 
   if (token->textlen > 0) {  // ignore null text sections
     node_list_.push_back(new TextTemplateNode(*token));
+    if (AUTO_ESCAPE_PARSING_CONTEXT(my_template->initial_context_)) {
+      assert(htmlparser);
+      if (htmlparser->state() == HtmlParser::STATE_ERROR ||
+          htmlparser->Parse(token->text, static_cast<int>(token->textlen)) ==
+          HtmlParser::STATE_ERROR) {
+        string error_msg =  "Failed parsing: " +
+            string(token->text, token->textlen) +
+            "\nIn: " + string(token_.text, token_.textlen);
+        LOG_AUTO_ESCAPE_ERROR(error_msg, my_template);
+        success = false;
+      }
+    }
+  }
+  return success;
+}
+
+// Under auto-escape (and parsing-enabled modes) advance the parser state.
+// TextTemplateNode is the only TemplateNode type that can change
+// the state of the parser.
+// Returns false only if the HTML parser failed to parse in
+// auto-escape mode.
+bool SectionTemplateNode::AddHelperNode(const TemplateToken* token,
+                                      Template* my_template) {
+  assert(token);
+  bool success = true;
+  HtmlParser *htmlparser = my_template->htmlparser_;
+
+  if (token->textlen > 0) {  // ignore null text sections
+    node_list_.push_back(new HelperTemplateNode(*token));
     if (AUTO_ESCAPE_PARSING_CONTEXT(my_template->initial_context_)) {
       assert(htmlparser);
       if (htmlparser->state() == HtmlParser::STATE_ERROR ||
@@ -1792,6 +1904,9 @@ bool SectionTemplateNode::AddSubnode(Template *my_template) {
         my_template->set_state(TS_ERROR);
       }
       break;
+    case TOKENTYPE_HELPER:
+    	this->AddHelperNode(&token, my_template);
+    break;
     case TOKENTYPE_NULL:
       // GetNextToken either hit the end of the file or a syntax error
       // in the file. Do nothing more here. Just return false to stop
@@ -1944,6 +2059,11 @@ TemplateToken SectionTemplateNode::GetNextToken(Template *my_template) {
           ttype = TOKENTYPE_PRAGMA;
           ++token_start;
           break;
+        case '$':
+          ttype = TOKENTYPE_HELPER;
+          ++token_start;
+          break;
+
         default:
           // the assumption that the next char is alnum or _ will be
           // tested below in the call to IsValidName().
@@ -1991,7 +2111,7 @@ TemplateToken SectionTemplateNode::GetNextToken(Template *my_template) {
       // Comments are a special case, since they don't have a name or action.
       // The set-delimiters command is the same way.
       if (ttype == TOKENTYPE_COMMENT || ttype == TOKENTYPE_SET_DELIMITERS ||
-          ttype == TOKENTYPE_PRAGMA) {
+          ttype == TOKENTYPE_PRAGMA || ttype == TOKENTYPE_HELPER) {
         ps->phase = Template::ParseState::GETTING_TEXT;
         ps->bufstart = token_end + ps->current_delimiters.end_marker_len;
         // If requested, remove any unescaped linefeed following a comment

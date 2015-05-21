@@ -65,6 +65,7 @@
 
 #include <sys/types.h>   // for size_t
 #include <string>
+#include <map>
 #include <ctemplate/template_emitter.h>   // so we can inline operator()
 #include <ctemplate/per_expand_data.h>    // could probably just forward-declare
 
@@ -73,12 +74,21 @@
 namespace ctemplate {
 
 class Template;
+class TemplateHelper;
 
 #define MODIFY_SIGNATURE_                                               \
  public:                                                                \
   virtual void Modify(const char* in, size_t inlen,                     \
                       const PerExpandData*, ExpandEmitter* outbuf,      \
                       const std::string& arg) const
+
+extern @ac_windows_dllexport@ std::map<std::string, TemplateHelper*> helpers;
+
+class @ac_windows_dllexport@ TemplateHelper {
+ public:
+  virtual std::string Modify(std::map<std::string,std::string> params) const = 0;
+  virtual ~TemplateHelper();   // always need a virtual destructor!
+};
 
 // If you wish to write your own modifier, it should subclass this
 // method.  Your subclass should only define Modify(); for efficiency,
